@@ -61,8 +61,8 @@ Backend Setup
 
     Clone the repository:
 
-git clone https://github.com/yourusername/support-hub.git
-cd support-hub/backend
+git clone https://github.com/muazje/ticketing-system.git
+cd ticketing-system/backend
 
     Install dependencies:
 
