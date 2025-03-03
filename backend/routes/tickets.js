@@ -11,16 +11,49 @@ router.get("/", authenticate, async (req, res) => {
     console.log("Starting ticket retrieval...")
     let tickets = []
 
-    if (req.user.role === "ADMIN") {
-      console.log("Admin user, fetching all tickets...")
-      tickets = await Ticket.find().populate("userId", "name email").sort({ createdAt: -1 }).lean().exec()
-    } else {
-      console.log("Regular user, fetching user tickets...")
-      tickets = await Ticket.find({ userId: req.user._id }).sort({ createdAt: -1 }).lean().exec()
+    // Add query parameters for filtering and pagination
+    const { status, search, page = 1, limit = 10 } = req.query
+    const skip = (page - 1) * limit
+
+    // Build query object
+    const query = {}
+
+    // Add status filter if provided
+    if (status && ["OPEN", "IN_PROGRESS", "CLOSED"].includes(status)) {
+      query.status = status
     }
 
+    // Add search filter if provided
+    if (search) {
+      query.$or = [{ title: { $regex: search, $options: "i" } }, { description: { $regex: search, $options: "i" } }]
+    }
+
+    // Add user filter for non-admin users
+    if (req.user.role !== "ADMIN") {
+      query.userId = req.user._id
+    }
+
+    // Execute query with pagination
+    tickets = await Ticket.find(query)
+      .populate("userId", "name email")
+      .sort({ createdAt: -1 })
+      .skip(skip)
+      .limit(Number.parseInt(limit))
+      .lean()
+      .exec()
+
+    // Get total count for pagination
+    const total = await Ticket.countDocuments(query)
+
     console.log(`Successfully retrieved ${tickets.length} tickets`)
-    return res.json(tickets)
+    return res.json({
+      tickets,
+      pagination: {
+        total,
+        page: Number.parseInt(page),
+        pages: Math.ceil(total / limit),
+      },
+    })
   } catch (error) {
     console.error("Error in GET /api/tickets:", error)
     return res.status(500).json({
@@ -35,19 +68,34 @@ router.get("/", authenticate, async (req, res) => {
 // @access  Private
 router.post("/", authenticate, async (req, res) => {
   try {
-    const { title, description } = req.body
+    const { title, description, priority = "MEDIUM" } = req.body
 
+    // Validate required fields
     if (!title || !description) {
       return res.status(400).json({ message: "Please provide title and description" })
+    }
+
+    // Validate title length
+    if (title.length < 3 || title.length > 100) {
+      return res.status(400).json({ message: "Title must be between 3 and 100 characters" })
+    }
+
+    // Validate description length
+    if (description.length < 10 || description.length > 1000) {
+      return res.status(400).json({ message: "Description must be between 10 and 1000 characters" })
     }
 
     const ticket = new Ticket({
       title,
       description,
+      priority,
       userId: req.user._id,
     })
 
     const savedTicket = await ticket.save()
+
+    // Populate user information before sending response
+    await savedTicket.populate("userId", "name email")
     console.log("Created new ticket:", savedTicket)
 
     return res.status(201).json(savedTicket)
@@ -61,31 +109,146 @@ router.post("/", authenticate, async (req, res) => {
 })
 
 // @route   PUT /api/tickets/:id
-// @desc    Update ticket status (admin only)
-// @access  Private/Admin
-router.put("/:id", authenticate, isAdmin, async (req, res) => {
+// @desc    Update ticket
+// @access  Private
+router.put("/:id", authenticate, async (req, res) => {
   try {
-    const { status } = req.body
+    const { title, description, status, priority } = req.body
+    const ticketId = req.params.id
 
-    if (!["OPEN", "IN_PROGRESS", "CLOSED"].includes(status)) {
-      return res.status(400).json({ message: "Invalid status" })
+    // Find the ticket
+    const ticket = await Ticket.findById(ticketId)
+
+    if (!ticket) {
+      return res.status(404).json({ message: "Ticket not found" })
     }
 
+    // Check authorization
+    if (req.user.role !== "ADMIN" && ticket.userId.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: "Not authorized to update this ticket" })
+    }
+
+    // Validate fields if provided
+    if (title) {
+      if (title.length < 3 || title.length > 100) {
+        return res.status(400).json({ message: "Title must be between 3 and 100 characters" })
+      }
+      ticket.title = title
+    }
+
+    if (description) {
+      if (description.length < 10 || description.length > 1000) {
+        return res.status(400).json({ message: "Description must be between 10 and 1000 characters" })
+      }
+      ticket.description = description
+    }
+
+    // Only admin can update status
+    if (status && req.user.role === "ADMIN") {
+      if (!["OPEN", "IN_PROGRESS", "CLOSED"].includes(status)) {
+        return res.status(400).json({ message: "Invalid status" })
+      }
+      ticket.status = status
+    }
+
+    // Only admin can update priority
+    if (priority && req.user.role === "ADMIN") {
+      if (!["LOW", "MEDIUM", "HIGH"].includes(priority)) {
+        return res.status(400).json({ message: "Invalid priority" })
+      }
+      ticket.priority = priority
+    }
+
+    const updatedTicket = await ticket.save()
+    await updatedTicket.populate("userId", "name email")
+
+    console.log("Updated ticket:", updatedTicket)
+    return res.json(updatedTicket)
+  } catch (error) {
+    console.error("Error in PUT /api/tickets/:id:", error)
+    return res.status(500).json({
+      message: "Failed to update ticket",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    })
+  }
+})
+
+// @route   DELETE /api/tickets/:id
+// @desc    Delete ticket
+// @access  Private
+router.delete("/:id", authenticate, async (req, res) => {
+  try {
     const ticket = await Ticket.findById(req.params.id)
 
     if (!ticket) {
       return res.status(404).json({ message: "Ticket not found" })
     }
 
-    ticket.status = status
-    const updatedTicket = await ticket.save()
-    console.log("Updated ticket:", updatedTicket)
+    // Check authorization (only admin or ticket owner can delete)
+    if (req.user.role !== "ADMIN" && ticket.userId.toString() !== req.user._id.toString()) {
+      return res.status(403).json({ message: "Not authorized to delete this ticket" })
+    }
 
-    return res.json(updatedTicket)
+    await ticket.deleteOne()
+    console.log("Deleted ticket:", req.params.id)
+
+    return res.json({ message: "Ticket deleted successfully" })
   } catch (error) {
-    console.error("Error in PUT /api/tickets/:id:", error)
+    console.error("Error in DELETE /api/tickets/:id:", error)
     return res.status(500).json({
-      message: "Failed to update ticket",
+      message: "Failed to delete ticket",
+      error: process.env.NODE_ENV === "development" ? error.message : undefined,
+    })
+  }
+})
+
+// Add this new route for ticket statistics
+// @route   GET /api/tickets/stats
+// @desc    Get ticket statistics
+// @access  Private/Admin
+router.get("/stats", authenticate, isAdmin, async (req, res) => {
+  try {
+    const stats = await Ticket.aggregate([
+      {
+        $facet: {
+          // Count total tickets
+          total: [{ $count: "count" }],
+          // Count by status
+          byStatus: [
+            {
+              $group: {
+                _id: "$status",
+                count: { $sum: 1 },
+              },
+            },
+          ],
+          // Count by priority
+          byPriority: [
+            {
+              $group: {
+                _id: "$priority",
+                count: { $sum: 1 },
+              },
+            },
+          ],
+        },
+      },
+    ])
+
+    // Format the response
+    const formattedStats = {
+      total: stats[0].total[0]?.count || 0,
+      open: stats[0].byStatus.find((s) => s._id === "OPEN")?.count || 0,
+      inProgress: stats[0].byStatus.find((s) => s._id === "IN_PROGRESS")?.count || 0,
+      closed: stats[0].byStatus.find((s) => s._id === "CLOSED")?.count || 0,
+      highPriority: stats[0].byPriority.find((p) => p._id === "HIGH")?.count || 0,
+    }
+
+    return res.json(formattedStats)
+  } catch (error) {
+    console.error("Error in GET /api/tickets/stats:", error)
+    return res.status(500).json({
+      message: "Failed to retrieve ticket statistics",
       error: process.env.NODE_ENV === "development" ? error.message : undefined,
     })
   }
