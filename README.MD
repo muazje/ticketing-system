@@ -1,8 +1,11 @@
 Support Hub - Modern Ticketing System
 ![Support Hub HOMEPAGE](HOME.png)
-![Support Hub Dashboard](HOMEADMIN.png)
-![Support Hub Dashboard](HOMEADMIN.png)
-![Support Hub Dashboard](HOMEADMIN.png)
+![Support Hub HOMEPAGE](HOME2.png)
+![Support Hub HOMEPAGE](HOME3.png)
+![Support Hub ADMINDASHBOARD](HOMEADMIN.png)
+![Support Hub USERDASHBOARD]HOMeUser.png)
+![Support Hub loginPAGE](authlog.png)
+![Support Hub registerPAGE](authregi.png)
 A full-stack role-based ticketing system built with the MERN stack (MongoDB, Express.js, React, Node.js). Support Hub provides a modern and efficient way to manage support tickets with different user roles and real-time updates.
 
 Support Hub Dashboad
